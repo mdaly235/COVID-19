@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sensor FFT</title>
+<meta name="description" content="Live Fast Fourier Transform of your phone's microphone and motion sensors.">
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --muted: #8b949e;
+    --accent: #3fb950; --accent2: #f0883e; --grid: #21262d; --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  main { max-width: 1100px; margin: 0 auto; padding: 12px 16px 32px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0; flex: 1; letter-spacing: .02em; }
+  button, select, input { font: inherit; color: var(--text); }
+  button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #04130a; font-weight: 600; min-width: 84px; }
+  button.primary.running { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button[aria-pressed="true"] { background: var(--accent2); border-color: var(--accent2); color: #1a0d00; }
+  select, input[type=number] { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; width: 100%; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .controls label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; padding-top: 18px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .readout { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+  .big { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .stat { font-size: 12px; color: var(--muted); }
+  .stat b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; margin-bottom: 12px; }
+  .panel h2 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 4px 6px; display: flex; justify-content: space-between; gap: 8px; }
+  .panel h2 span:last-child { font-variant-numeric: tabular-nums; color: var(--text); }
+  canvas { display: block; width: 100%; touch-action: none; }
+  #wave { height: 110px; }
+  #spec { height: 240px; }
+  .stack { position: relative; height: 220px; }
+  .stack canvas { position: absolute; inset: 0; height: 100%; }
+  #peaks { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 4px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #peaks span { background: var(--grid); border-radius: 6px; padding: 2px 8px; }
+  #msg { display: none; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+  #msg.show { display: block; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  footer { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Sensor FFT</h1>
+    <button id="freeze" aria-pressed="false">Freeze</button>
+    <button id="start" class="primary">Start</button>
+  </header>
+
+  <div id="msg" role="alert"></div>
+
+  <section class="controls">
+    <label>Source
+      <select id="source">
+        <option value="mic">Microphone</option>
+        <option value="accel">Accelerometer</option>
+        <option value="linacc">Linear acceleration</option>
+        <option value="gyro">Gyroscope</option>
+        <option value="mag">Magnetometer</option>
+        <option value="test">Test signal</option>
+      </select>
+    </label>
+    <label>Channel <select id="channel"></select></label>
+    <label>FFT size <select id="size"></select></label>
+    <label>Window <select id="window"></select></label>
+    <label>Frequency axis
+      <select id="scale"><option value="lin">Linear</option><option value="log">Logarithmic</option></select>
+    </label>
+    <label>Max frequency (Hz) <input id="fmax" type="number" min="0" step="any" placeholder="Nyquist"></label>
+    <label>Averaging <span id="avgVal"></span><input id="avg" type="range" min="0" max="0.95" step="0.05" value="0.5"></label>
+    <label>Dynamic range <span id="rangeVal"></span><input id="range" type="range" min="30" max="140" step="5" value="90"></label>
+    <label class="check"><input id="dc" type="checkbox" checked> Remove DC / gravity</label>
+  </section>
+
+  <section class="readout">
+    <div><div class="stat">Dominant frequency</div><div class="big" id="dom">—</div></div>
+    <div class="stat">Period <b id="period">—</b></div>
+    <div class="stat">Amplitude <b id="ampl">—</b></div>
+    <div class="stat" id="noteWrap" hidden>Note <b id="note">—</b></div>
+    <div class="stat">Sample rate <b id="fs">—</b></div>
+    <div class="stat">Bin width Δf <b id="df">—</b></div>
+    <div class="stat">Window length <b id="tlen">—</b></div>
+    <div class="stat">Buffer <b id="fill">—</b></div>
+    <div class="stat">Backend <b id="backend">—</b></div>
+  </section>
+
+  <section class="panel">
+    <h2><span>Waveform (time domain)</span><span id="waveInfo"></span></h2>
+    <canvas id="wave"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2><span>Spectrum — tap to read a value</span><span id="cursor"></span></h2>
+    <canvas id="spec"></canvas>
+    <div id="peaks"></div>
+  </section>
+
+  <section class="panel">
+    <h2><span>Spectrogram (time →)</span><span id="specUnits"></span></h2>
+    <div class="stack"><canvas id="sgram"></canvas><canvas id="sgramAxis"></canvas></div>
+  </section>
+
+  <div class="row" style="margin-bottom:12px">
+    <button id="csv">Export spectrum CSV</button>
+    <button id="raw">Export waveform CSV</button>
+    <button id="clear">Clear spectrogram</button>
+  </div>
+
+  <footer>
+    Sensors need a secure (https://) page. Motion sensors deliver roughly 60–200 samples per second,
+    so they show frequencies up to about 30–100 Hz. Everything runs on your phone; no data leaves it.
+  </footer>
+</main>
+<script type="module" src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
